@@ -1,4 +1,4 @@
-name: aufgabe_3
+name: "333"
 description: A minimal Azure Native Python Pulumi program
 runtime:
   name: python
