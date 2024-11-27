@@ -1,13 +1,11 @@
 import pulumi
-import os
 from pulumi_azure_native import resources, storage, web, insights
-from pulumi import FileAsset, Output
 
 # **1. Ressourcengruppe erstellen**
-resource_group = resources.ResourceGroup("uebung3-resourcegroup", location="japaneast")
+resource_group = resources.ResourceGroup("uebung3-resourcegroup", location="westeurope")
 
 # **2. Storage-Account erstellen**
-# wird benötigt zur speicherung von Daten
+# wird benötigt zur Speicherung von Daten
 storage_account = storage.StorageAccount(
     "storageaccount",
     resource_group_name=resource_group.name,  # Verknüpft mit der Ressourcengruppe
@@ -17,33 +15,9 @@ storage_account = storage.StorageAccount(
     allow_blob_public_access=True  # Aktiviert öffentlichen Zugriff auf Blobs
 )
 
-# **3. Blob-Container erstellen**
 
-blob_container = storage.BlobContainer(
-    "blobcontainer",
-    account_name=storage_account.name,  # Verknüpft mit dem Storage-Account
-    resource_group_name=resource_group.name,  # Verknüpft mit der Ressourcengruppe
-    public_access="Blob"  # Ermöglicht öffentlichen Lesezugriff auf die Blobs
-)
 
-# **4. ZIP-Datei erstellen**
-os.system('cd clco-demo && zip -r ../webapp.zip .')
-
-# **5. ZIP-Datei in Blob-Container hochladen**
-app_blob = storage.Blob(
-    "webappzip",
-    resource_group_name=resource_group.name,  # Verknüpft mit der Ressourcengruppe
-    account_name=storage_account.name,  # Verknüpft mit dem Storage-Account
-    container_name=blob_container.name,  # Verknüpft mit dem Blob-Container
-    source=FileAsset("./webapp.zip")  
-)
-
-# **6. Blob-URL generieren**
-blob_url = pulumi.Output.concat(
-    "https://", storage_account.name, ".blob.core.windows.net/", blob_container.name, "/", app_blob.name
-)
-
-# **7. App Service Plan erstellen**
+# **4. App Service Plan erstellen**
 app_service_plan = web.AppServicePlan(
     "serviceplan",
     resource_group_name=resource_group.name,  # Verknüpft mit der Ressourcengruppe
@@ -56,23 +30,56 @@ app_service_plan = web.AppServicePlan(
     )
 )
 
-# **9. Web-App erstellen**
-web_app = web.WebApp(
-    "webapp",
-    resource_group_name=resource_group.name,  # Verknüpft mit der Ressourcengruppe
-    location=resource_group.location,  # Gleicher Standort wie die Ressourcengruppe
-    server_farm_id=app_service_plan.id,  # Verknüpft mit dem App Service Plan
-    site_config=web.SiteConfigArgs(  # Konfiguration der Laufzeitumgebung
-        linux_fx_version='PYTHON|3.9',  # Laufzeitumgebung: Python 3.9
-        app_settings=[  # Umgebungsvariablen der Web-App
-            web.NameValuePairArgs(
-                name="WEBSITE_RUN_FROM_PACKAGE",  # App läuft direkt von der ZIP-Datei
-                value=blob_url  # URL zur ZIP-Datei
-            ),
-        ]
-    ),
-    https_only=True  # HTTPS-Zugriff erzwingen
+# **5. Application Insights hinzufügen**
+app_insights = insights.Component(
+    "appinsights",
+    resource_group_name=resource_group.name,
+    location=resource_group.location,
+    application_type="web",
+    kind="web",
+    ingestion_mode="ApplicationInsights"
 )
 
-# URL exportieren**
-pulumi.export("web_app_url", Output.concat("http://", web_app.default_host_name))
+# **6. Web-App erstellen**
+web_app_name = "myUniqueWebAppName"
+github_repo_url = "https://github.com/dmelichar/clco-demo"
+branch_name = "main"
+
+web_app = web.WebApp(
+    web_app_name,
+    resource_group_name=resource_group.name,
+    server_farm_id=app_service_plan.id,
+    site_config=web.SiteConfigArgs(
+        linux_fx_version='PYTHON|3.9',  
+        app_settings=[
+            web.NameValuePairArgs(
+                name="APPINSIGHTS_INSTRUMENTATIONKEY",
+                value=app_insights.instrumentation_key
+            ),
+            web.NameValuePairArgs(
+                name="FLASK_ENV",
+                value="development"
+            ),
+            web.NameValuePairArgs(
+                name="FLASK_DEBUG",
+                value="1"
+            )
+        ]
+    ),
+    https_only=True, 
+    opts=pulumi.ResourceOptions(depends_on=[app_service_plan])
+)
+
+# **7. Quellcodeverwaltung konfigurieren**
+source_control = web.WebAppSourceControl(
+    "sourceControl",
+    resource_group_name=resource_group.name,
+    name=web_app.name,
+    repo_url=github_repo_url,
+    branch=branch_name,
+    is_manual_integration=False,
+    opts=pulumi.ResourceOptions(depends_on=[web_app])
+)
+
+# URL exportieren
+pulumi.export("web_app_url", pulumi.Output.concat("https://", web_app.default_host_name))
